@@ -1,6 +1,6 @@
+import contextlib
 import tempfile
 from pathlib import Path
-import contextlib
 
 import numpy as np
 import pandas as pd
@@ -110,11 +110,10 @@ def coordinates_to_maps(
             for i, (pmid, article) in enumerate(all_articles)
         )
         output.flush()
-        if return_memmap:
-            result = pd.DataFrame(output, index=pmids)
-        else:
-            result = pd.DataFrame(np.array(output), index=pmids)
-        return result, masker
+        if not return_memmap:
+            # make an in-memory copy if the memmap is temporary
+            output = np.array(output)
+        return pd.DataFrame(output, index=pmids), masker
 
 
 def iter_coordinates_to_maps(

@@ -113,10 +113,7 @@ def test_parallel_coordinates_to_maps_should_match_original_implementation(
             "z": [27.0, 0.0, 30.0, 17.0, 177.0],
         }
     )
-    if persist_memmap:
-        memmap = tmp_path.joinpath("maps.dat")
-    else:
-        memmap = None
+    memmap = tmp_path.joinpath("maps.dat") if persist_memmap else None
     maps, masker = img_utils.coordinates_to_maps(
         coords, n_jobs=2, output_memmap_file=memmap
     )
