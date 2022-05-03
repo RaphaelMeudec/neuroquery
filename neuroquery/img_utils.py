@@ -1,3 +1,4 @@
+import contextlib
 import tempfile
 from pathlib import Path
 
@@ -63,25 +64,62 @@ def _coords_to_masked_map(coordinates, masker, fwhm, output, idx):
     output[idx] = masker.transform(img).squeeze()
 
 
-def coordinates_to_maps(
-    coordinates, mask_img=None, target_affine=(4, 4, 4), fwhm=9.0, n_jobs=1
+def coordinates_to_memmapped_maps(
+    coordinates,
+    output_memmap_file,
+    mask_img=None,
+    target_affine=(4, 4, 4),
+    fwhm=9.0,
+    n_jobs=1,
+    context=None,
 ):
     masker = get_masker(mask_img=mask_img, target_affine=target_affine)
     pmids = np.unique(coordinates["pmid"].values)
-    n_articles, n_voxels = len(pmids), image.get_data(masker.mask_img_).sum()
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_file = Path(tmp_dir).joinpath("brain_maps_memmap.dat")
-        output = np.memmap(
-            tmp_file, mode="w+", dtype=np.float64, shape=(n_articles, n_voxels)
+    shape = len(pmids), image.get_data(masker.mask_img_).sum()
+    output = np.memmap(
+        str(output_memmap_file),
+        mode="w+",
+        dtype=np.float32,
+        shape=shape,
+    )
+    if context is not None:
+        context.enter_context(contextlib.closing(output._mmap))
+    all_articles = coordinates.groupby("pmid", sort=True)
+    Parallel(n_jobs, verbose=1)(
+        delayed(_coords_to_masked_map)(
+            article.loc[:, ["x", "y", "z"]].values,
+            masker,
+            fwhm,
+            output,
+            i,
         )
-        all_articles = coordinates.groupby("pmid", sort=True)
-        Parallel(n_jobs, verbose=1)(
-            delayed(_coords_to_masked_map)(
-                article.loc[:, ["x", "y", "z"]].values, masker, fwhm, output, i
-            )
-            for i, (pmid, article) in enumerate(all_articles)
+        for i, (pmid, article) in enumerate(all_articles)
+    )
+    output.flush()
+    return output, pmids, masker
+
+
+def coordinates_to_maps(
+    coordinates,
+    mask_img=None,
+    target_affine=(4, 4, 4),
+    fwhm=9.0,
+    n_jobs=1,
+):
+    with contextlib.ExitStack() as context:
+        tmp_dir = context.enter_context(tempfile.TemporaryDirectory())
+        output_memmap_file = Path(tmp_dir).joinpath("brain_maps.dat")
+        output, pmids, masker = coordinates_to_memmapped_maps(
+            coordinates,
+            output_memmap_file,
+            mask_img=None,
+            target_affine=(4, 4, 4),
+            fwhm=9.0,
+            n_jobs=1,
+            context=context,
         )
-        return pd.DataFrame(np.array(output), index=pmids), masker
+        return pd.DataFrame(output, index=pmids, copy=True), masker
+
 
 def iter_coordinates_to_maps(
     coordinates, mask_img=None, target_affine=(4, 4, 4), fwhm=9.0

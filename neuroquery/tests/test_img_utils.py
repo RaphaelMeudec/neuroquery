@@ -1,3 +1,5 @@
+import contextlib
+
 import numpy as np
 import pandas as pd
 
@@ -54,7 +56,8 @@ def test_gaussian_coord_smoothing():
     assert values[-1] == pytest.approx(0.0)
 
 
-def test_coordinates_to_maps():
+@pytest.mark.parametrize("use_memmap", [True, False])
+def test_coordinates_to_maps(use_memmap, tmp_path):
     coords = pd.DataFrame.from_dict(
         {
             "pmid": [3, 17, 17, 2, 2],
@@ -63,7 +66,16 @@ def test_coordinates_to_maps():
             "z": [27.0, 0.0, 30.0, 17.0, 177.0],
         }
     )
-    maps, masker = img_utils.coordinates_to_maps(coords)
+    if use_memmap:
+        memmap = tmp_path.joinpath("maps.dat")
+        with contextlib.ExitStack() as context:
+            maps_vals, pmids, masker = img_utils.coordinates_to_memmapped_maps(
+                coords, output_memmap_file=memmap, context=context
+            )
+            assert isinstance(maps_vals, np.memmap)
+            maps = pd.DataFrame(maps_vals, index=pmids, copy=True)
+    else:
+        maps, masker = img_utils.coordinates_to_maps(coords)
     # nilearn mni mask changed
     assert maps.shape == (3, 28542) or maps.shape == (3, 29398)
     coords_17 = [(0.0, 0.0, 0.0), (10.0, -10.0, 30.0)]
@@ -82,17 +94,22 @@ def _coordinates_to_maps(
             coordinates.shape[0], len(set(coordinates["pmid"]))
         )
     )
-    masker = img_utils.get_masker(mask_img=mask_img, target_affine=target_affine)
+    masker = img_utils.get_masker(
+        mask_img=mask_img, target_affine=target_affine
+    )
     images, img_pmids = [], []
     for pmid, img in img_utils.iter_coordinates_to_maps(
         coordinates, mask_img=masker, fwhm=fwhm
     ):
-        images.append(masker.transform(img).ravel())
+        images.append(masker.transform(img).ravel().astype("float32"))
         img_pmids.append(pmid)
-    return pd.DataFrame(images, index=img_pmids), masker
+    return pd.DataFrame(images, index=img_pmids, dtype="float32"), masker
 
 
-def test_parallel_coordinates_to_maps_should_match_original_implementation():
+@pytest.mark.parametrize("use_memmap", [True, False])
+def test_parallel_coordinates_to_maps_should_match_original_implementation(
+    use_memmap, tmp_path
+):
     coords = pd.DataFrame.from_dict(
         {
             "pmid": [3, 17, 17, 2, 2],
@@ -101,8 +118,16 @@ def test_parallel_coordinates_to_maps_should_match_original_implementation():
             "z": [27.0, 0.0, 30.0, 17.0, 177.0],
         }
     )
-
-    maps, masker = img_utils.coordinates_to_maps(coords, n_jobs=2)
+    if use_memmap:
+        memmap = tmp_path.joinpath("maps.dat")
+        with contextlib.ExitStack() as context:
+            maps_vals, pmids, masker = img_utils.coordinates_to_memmapped_maps(
+                coords, n_jobs=2, output_memmap_file=memmap, context=context
+            )
+            assert isinstance(maps_vals, np.memmap)
+            maps = pd.DataFrame(maps_vals, index=pmids, copy=True)
+    else:
+        maps, masker = img_utils.coordinates_to_maps(coords, n_jobs=2)
     original_maps, original_masker = _coordinates_to_maps(coords)
 
     pd.testing.assert_frame_equal(maps, original_maps)
